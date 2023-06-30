@@ -1,0 +1,187 @@
+component FaultyPMSM    
+    % Faulty PMSM
+    % Permanent Magnet Synchronous Motor with fault conditions.
+    % This block models a permanent magnet synchronous motor with inter-turn
+    % fault conditions.
+
+    % Implementation according to 10.1016/j.ifacol.2015.07.055
+    % Otava et al.: Interior Permanent Magnet Synchronous Motor Stator Winding Fault Modelling
+
+    annotations
+        Icon = "ThermalPMSM.svg"
+    end
+    
+    parameters % PMSM Parameters
+        nPolePairs =  {6, '1'};    % Number of pole pairs
+        PsiPM0 = {0.03, 'Wb'};     % Permanent magnet flux linkage
+        sigma = {0.1, '1'}         % Ratio of shorted turns (inter-turn fault)
+        Ld0 = {0.00027, 'H'};      % Stator d-axis inductance, Ld
+        Lq0 = {0.00027, 'H'};      % Stator q-axis inductance, Lq
+        Rs0 = {0.14, 'Ohm'};       % Stator resistance per phase, Rs 
+        Ms = {0.0, 'H'};           % Stator mutual inductance 
+    end
+
+    parameters % Mechanical Parameters
+        J = {1e-04, 'kg*m^2'};     % Rotor inertia
+        d = {0, 'N*m*s/rad'};      % Rotor damping
+    end
+
+    parameters % Thermal Parameters
+        alphaRs = {0.00393, '1/K'};  % Resistance temperature coefficient
+        alphaPsi = {-0.001, '1/K'};  % Permanent magnet flux temperature coefficient
+        Tmeas = {298.15, 'K'};       % Static motor temperature
+        Tbase = {298.15, 'K'};       % Base temperature of parameter values
+    end
+
+    parameters (Access = private) % Dependent parameters
+        deltaT = Tmeas - Tbase;
+        dRs = max(1e-6, 1 + alphaRs*deltaT);
+        dPsi = max(1e-6, 1 + alphaPsi*deltaT);
+    
+        Rs = Rs0 * dRs;
+        PsiPM = PsiPM0 * dPsi;
+        Ld = Ld0 / dPsi;
+        Lq = Lq0 / dPsi;
+    end
+
+    parameters (Access=protected)
+        shift_3ph = {[0, -4*pi/3, 4*pi/3], 'rad'};
+    end
+        
+    nodes
+        N = foundation.electrical.three_phase;              % ~:left
+        R = foundation.mechanical.rotational.rotational;    % R:right
+        C = foundation.mechanical.rotational.rotational;    % C:right
+    end
+        
+    variables
+        % Mechanical
+        angle = {0, 'rad'}; % Rotor angle wrt synchronous reference frame
+        rotorSpeed = {0, 'rpm'}; % Rotor speed
+        
+        % Stator currents
+        i_uvw = {[0, 0, 0], 'A'}; % Phase currents
+    end
+    
+    variables (Access=protected)
+        % Mechanical
+        torque = {0, 'N*m'}; % Mechanical torque
+        elecTorque = {0, 'N*m'}; % Electrical torque
+
+        % Electrical
+        v_uvw = {[0, 0, 0], 'V'}; % Phase voltages
+
+        % Stator currents and voltages with faulty path
+        i_uvwf = {[0; 0; 0; 0], 'A'}; % Phase currents
+        v_uvwf = {[0; 0; 0; 0], 'V'}; % Phase voltages
+    end
+    
+    branches
+        i_uvw : N.I -> *;
+        torque : C.t -> R.t;
+    end
+
+    equations
+        let
+            % Inductances
+            L_delta = (Lq - Ld) / 3; 
+            Lm = (Lq - 3/2 * L_delta) / 3;
+            Ls = 2 * Lm;
+
+            % Mechanical and electrical angles and velocities
+            elecAngle = nPolePairs * angle;
+            elecAngleVec = elecAngle + shift_3ph;
+            elecSpeed = nPolePairs * rotorSpeed;
+            
+            % Resistance matrix
+            Rs_uvwf = [Rs, 0, 0, 0; ...
+                0, (1-sigma)*Rs, 0, 0; ...
+                0, 0, Rs, 0; ...
+                0, 0, 0, sigma*Rs];
+            
+%             % Inductance functions
+%             L_uu = Ls + Lm - L_delta * cos(2*elecAngleVec(1));
+%             L_vv = Ls + Lm - L_delta * cos(2*elecAngleVec(3));
+%             L_ww = Ls + Lm - L_delta * cos(2*elecAngleVec(2));
+%             L_uv = -0.5 * Lm - L_delta * cos(2*elecAngleVec(1) + pi/3);
+%             L_vw = -0.5 * Lm - L_delta * cos(2*elecAngleVec(3) + pi/3);
+%             L_wu = -0.5 * Lm - L_delta * cos(2*elecAngleVec(2) + pi/3);
+%             L_vu = L_uv;
+%             L_wv = L_vw;
+%             L_uw = L_wu;
+% 
+%             % Rotation derivative of inductances
+%             L_uu_theta = 2 * Lm * sin(2*elecAngleVec(1));
+%             L_vv_theta = 2 * Lm * sin(2*elecAngleVec(3));
+%             L_ww_theta = 2 * Lm * sin(2*elecAngleVec(2));
+%             L_uv_theta = -2 * Lm * sin(2*elecAngleVec(1) + pi/3);
+%             L_vw_theta = -2 * Lm * sin(2*elecAngleVec(3) + pi/3);
+%             L_wu_theta = -2 * Lm * sin(2*elecAngleVec(2) + pi/3);
+%             L_vu_theta = L_uv_theta;
+%             L_wv_theta = L_vw_theta;
+%             L_uw_theta = L_wu_theta;
+
+             % Inductance functions
+            L_uu = Ls + Lm - L_delta* cos(2*elecAngleVec(1));
+            L_vv = Ls + Lm - L_delta * cos(2*elecAngleVec(2));
+            L_ww = Ls + Lm - L_delta* cos(2*elecAngleVec(3));
+            L_uv = -0.5 * Lm - L_delta * cos(2*elecAngle - 2*pi/3);
+            L_vw = -0.5 * Lm - L_delta * cos(2*elecAngle + 2*pi/3);
+            L_wu = -0.5 * Lm - L_delta * cos(2*elecAngle);
+            L_vu = L_uv;
+            L_wv = L_vw;
+            L_uw = L_wu;
+
+            % Rotation derivative of inductances
+            L_uu_theta = 2 * L_delta * sin(2*elecAngleVec(1));
+            L_vv_theta = 2 * L_delta * sin(2*elecAngleVec(2));
+            L_ww_theta = 2 * L_delta * sin(2*elecAngleVec(3));
+            L_uv_theta = 2 * L_delta * sin(2*elecAngle - 2*pi/3);
+            L_vw_theta = 2 * L_delta * sin(2*elecAngle + 2*pi/3);
+            L_wu_theta = 2 * L_delta * sin(2*elecAngle);
+            L_vu_theta = L_uv_theta;
+            L_wv_theta = L_vw_theta;
+            L_uw_theta = L_wu_theta;
+
+            % Create inductance matrix
+            L_uvwf = [L_uu, (1-sigma)*L_uv, L_uw, sigma*L_uv; ...
+                (1-sigma)*L_vu, (1-sigma)^2*L_vv, (1-sigma)*L_vw, (1-sigma)*sigma*L_vv; ...
+                L_wu, (1-sigma)*L_wv, L_ww, sigma*L_wv; ...
+                sigma*L_vu, (1-sigma)*sigma*L_vv, sigma*L_vw, sigma^2*L_vv];
+
+            % Create time derivate inductance matrix
+            L_uvwf_theta = [L_uu_theta, (1-sigma)*L_uv_theta, L_uw_theta, sigma*L_uv_theta; ...
+                (1-sigma)*L_vu_theta, (1-sigma)^2*L_vv_theta, (1-sigma)*L_vw_theta, (1-sigma)*sigma*L_vv_theta; ...
+                L_wu_theta, (1-sigma)*L_wv_theta, L_ww_theta, sigma*L_wv_theta; ...
+                sigma*L_vu_theta, (1-sigma)*sigma*L_vv_theta, sigma*L_vw_theta, sigma^2*L_vv_theta];
+
+            % Create angular derivative inductance matrix
+            L_uvwf_time = elecSpeed * L_uvwf_theta;
+
+            % Calculate Back-EMF
+            e_uvwf = elecSpeed * PsiPM * ...
+                [cos(elecAngleVec(1)); ...
+                (1-sigma) * cos(elecAngleVec(2)); ...
+                cos(elecAngleVec(3)); ...
+                sigma * cos(elecAngleVec(2))];       
+        in
+            % Electric to mechanical rotation
+            rotorSpeed == angle.der;
+            rotorSpeed == R.w - C.w;
+            
+            % Voltages across the windings
+            v_uvwf == Rs_uvwf * i_uvwf + L_uvwf * der(i_uvwf) + L_uvwf_time * i_uvwf + e_uvwf
+            v_uvw' == v_uvwf(1:3);
+            v_uvw == N.V;
+            % Voltage across fault should be 0
+            0 == v_uvwf(4);
+
+            % Current in the three phases
+            i_uvw' == i_uvwf(1:3);
+
+            % Torque
+            elecTorque == nPolePairs * (1/2 * i_uvwf' * L_uvwf_theta * i_uvwf + (i_uvwf' * e_uvwf) / elecSpeed);
+            torque == elecTorque - J * der(rotorSpeed) - d * rotorSpeed
+        end
+    end
+end
